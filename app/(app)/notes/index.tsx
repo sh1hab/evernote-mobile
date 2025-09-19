@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import axios from 'axios';
 import { useNavigation } from '@react-navigation/native';
+import NoteForm from '../../../components/NoteForm';
 
 
 const windowWidth = Dimensions.get('window').width;
@@ -20,11 +21,21 @@ const getRandomColor = () => {
     return colors[Math.floor(Math.random() * colors.length)];
 };
 
+const getUniqueKey = (item) => {
+    // Use id, _id, or create a unique key from multiple fields
+    if (item?.id) return `id_${item.id}`;
+    if (item?._id) return `_id_${item._id}`;
+    if (item?.created_at) return `created_${item.created_at}`;
+    // Fallback to a combination of fields
+    return `fallback_${item?.title}_${item?.created_at || Date.now()}`;
+};
+
 // Add this interface near the top of your file
 interface Note {
     id: number;
     title: string;
-    description?: string;
+    content: string;
+    description: string;
     created_at: string;
 }
 
@@ -40,6 +51,10 @@ export default function App() {
     const [currentPage, setCurrentPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [isEditing, setIsEditing] = useState(false);
+    const [editingNote, setEditingNote] = useState<Note | null>(null);
+    const [noteTitle, setNoteTitle] = useState('');
+    const [noteContent, setNoteContent] = useState('');
 
     useEffect(() => {
         loadNotes();
@@ -68,7 +83,13 @@ export default function App() {
 
             const newNotes = response.data.data;
             setHasMore(newNotes.length === ITEMS_PER_PAGE);
-            setNotes(page === 1 ? newNotes : [...notes, ...newNotes]);
+            // Normalize notes to ensure consistent ID field
+            const normalizedNotes = newNotes.map(note => ({
+                ...note,
+                id: note.id || note._id,
+                _id: note._id || note.id
+            }));
+            setNotes(page === 1 ? normalizedNotes : [...notes, ...normalizedNotes]);
             setCurrentPage(page);
         } catch (error) {
             Alert.alert('Error', 'Failed to fetch notes');
@@ -81,13 +102,21 @@ export default function App() {
     const renderNote = ({ item }) => (
         <TouchableOpacity
             style={[styles.note, { backgroundColor: getRandomColor() }]}
-            onLongPress={() => deleteNote(item.id)}
+            onLongPress={() => deleteNote(item.id || item._id)}
             onPress={() => setSelectedNote(item)}
         >
             <Text style={styles.noteText} numberOfLines={3}>{item.title}</Text>
             <Text style={styles.noteDate}>
                 {new Date(item.created_at).toLocaleDateString()}
             </Text>
+            <View style={styles.noteActions}>
+                <TouchableOpacity 
+                    onPress={() => handleEdit(item)}
+                    style={styles.editButton}
+                >
+                    <Text>✎</Text>
+                </TouchableOpacity>
+            </View>
         </TouchableOpacity>
     );
 
@@ -116,7 +145,13 @@ export default function App() {
                     }
                 }
             );
-            setNotes([...notes, response.data.data]);
+            const newNote = response.data.data;
+            const normalizedNote = {
+                ...newNote,
+                id: newNote.id || newNote._id,
+                _id: newNote._id || newNote.id
+            };
+            setNotes([...notes, normalizedNote]);
             setNoteText('');
         } catch (error) {
             Alert.alert('Error', 'Failed to add note');
@@ -148,7 +183,7 @@ export default function App() {
                                     Authorization: `Bearer ${token}`,
                                 }
                             });
-                            setNotes(notes.filter(note => note.id !== id));
+                            setNotes(notes.filter(note => (note.id || note._id) !== id));
                         } catch (error) {
                             Alert.alert('Error', 'Failed to delete note');
                             console.error('Error:', error);
@@ -186,6 +221,49 @@ export default function App() {
         setMenuVisible(false);
     };
 
+    const handleEdit = (note: Note) => {
+        setEditingNote(note);
+        setNoteTitle(note.title);
+        setNoteContent(note.description);
+        setIsEditing(true);
+    };
+
+    const updateNote = async () => {
+        if (!editingNote) return;
+
+        setLoading(true);
+        let token = await AsyncStorage.getItem('token');
+        token = "Bearer " + token.replace(/['"]+/g, '');
+        console.log(token);
+        console.log(editingNote);
+        try {
+        
+            const response = await axios.put(
+                `${API_URL}/notes/${editingNote._id}`,
+                { title: noteTitle, description: noteContent },
+                {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`,
+                    }
+                }
+            );
+
+            setNotes(notes.map(note => 
+                (note.id || note._id) === (editingNote.id || editingNote._id) ? response.data.data : note
+            ));
+            setIsEditing(false);
+            setEditingNote(null);
+            setNoteTitle('');
+            setNoteContent('');
+        } catch (error) {
+            console.error('Error:', error);
+            Alert.alert('Error', 'Failed to update note');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
         <View style={styles.container}>
             <StatusBar style="auto" />
@@ -219,7 +297,7 @@ export default function App() {
                 <FlatList
                     data={notes}
                     renderItem={renderNote}
-                    keyExtractor={item => item?.id?.toString() || Math.random().toString()}
+                    keyExtractor={getUniqueKey}
                     numColumns={2}
                     contentContainerStyle={styles.notesContainer}
                     onEndReached={() => {
@@ -276,6 +354,36 @@ export default function App() {
                             </TouchableOpacity>
                         </View>
                     </TouchableOpacity>
+                </Modal>
+
+                <Modal
+                    transparent={true}
+                    animationType="slide"
+                    visible={isEditing}
+                    onRequestClose={() => setIsEditing(false)}
+                >
+                    <View style={styles.modalContainer}>
+                        <View style={styles.modalContent}>
+                            <Text style={styles.modalTitle}>Edit Note</Text>
+                            <NoteForm
+                                title={noteTitle}
+                                content={noteContent}
+                                onTitleChange={setNoteTitle}
+                                onContentChange={setNoteContent}
+                                onSubmit={updateNote}
+                                submitButtonText="Update Note"
+                            />
+                            <TouchableOpacity
+                                style={styles.modalCloseButton}
+                                onPress={() => {
+                                    setIsEditing(false);
+                                    setEditingNote(null);
+                                }}
+                            >
+                                <Text style={styles.modalCloseText}>Cancel</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
                 </Modal>
             </View>
         </View>
@@ -365,9 +473,10 @@ const styles = StyleSheet.create({
         padding: 20,
     },
     modalTitle: {
-        fontSize: 18,
+        fontSize: 20,
         fontWeight: 'bold',
-        marginBottom: 10,
+        marginBottom: 20,
+        textAlign: 'center',
     },
     modalDate: {
         fontSize: 14,
@@ -402,6 +511,38 @@ const styles = StyleSheet.create({
     loadingMore: {
         width: '100%',
         paddingVertical: 15,
+        alignItems: 'center',
+    },
+    form: {
+        padding: 20,
+    },
+    contentInput: {
+        height: 150,
+        textAlignVertical: 'top',
+    },
+    submitButton: {
+        backgroundColor: '#ffd700',
+        padding: 15,
+        borderRadius: 10,
+        alignItems: 'center',
+    },
+    submitButtonText: {
+        color: '#000',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+    noteActions: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        marginTop: 10,
+    },
+    editButton: {
+        padding: 5,
+        backgroundColor: 'rgba(255,255,255,0.3)',
+        borderRadius: 15,
+        width: 30,
+        height: 30,
+        justifyContent: 'center',
         alignItems: 'center',
     },
 });
