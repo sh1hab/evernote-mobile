@@ -15,6 +15,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { router } from 'expo-router';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
 const ITEMS_PER_PAGE = 10;
@@ -25,12 +26,24 @@ interface Transaction {
   currency?: string;
   category: string;
   description: string;
-  type: 'income' | 'expense';
+  type: 'income' | 'expense' | 'credit' | 'debit';
   datetime: string;
   notes: string;
 }
 
 const MoneyManager = () => {
+  // Helper function to normalize transaction type to income/expense
+  const normalizeType = (type: string): 'income' | 'expense' => {
+    if (type === 'credit' || type === 'income') return 'income';
+    if (type === 'debit' || type === 'expense') return 'expense';
+    return 'expense'; // default
+  };
+
+  // Helper function to check if transaction is income type
+  const isIncomeType = (type: string): boolean => {
+    return type === 'credit' || type === 'income';
+  };
+
   // State Management
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [filteredTransactions, setFilteredTransactions] = useState<Transaction[]>([]);
@@ -47,6 +60,9 @@ const MoneyManager = () => {
   const [transactionType, setTransactionType] = useState<'income' | 'expense'>('expense');
   const [date, setDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Filter States
   const [searchQuery, setSearchQuery] = useState('');
@@ -116,7 +132,7 @@ const MoneyManager = () => {
 
       const url = `${API_URL}/transactions?page=${pageNum}&limit=${ITEMS_PER_PAGE}`;
       console.log('Fetching from:', url);
-      
+
       const response = await axios.get(url);
       console.log('API Response:', response.data);
       console.log('Response type:', typeof response.data);
@@ -124,7 +140,7 @@ const MoneyManager = () => {
 
       // Handle different response formats
       let paginatedTransactions: Transaction[] = [];
-      
+
       if (Array.isArray(response.data)) {
         // Direct array response
         paginatedTransactions = response.data;
@@ -144,7 +160,7 @@ const MoneyManager = () => {
 
       console.log('Processed transactions:', paginatedTransactions);
       console.log('Transaction count:', paginatedTransactions.length);
-      
+
       let updatedTransactions: Transaction[];
       if (pageNum === 1 || isRefresh) {
         updatedTransactions = paginatedTransactions;
@@ -154,17 +170,20 @@ const MoneyManager = () => {
 
       setTransactions(updatedTransactions);
       setHasMore(paginatedTransactions.length === ITEMS_PER_PAGE);
-      
+
       // Apply filters to the updated transactions
       applyFilters(updatedTransactions);
-      
+
     } catch (error: any) {
-      console.error('Error fetching transactions:', error);
-      console.error('Error details:', error.response?.data || error.message);
-      Alert.alert(
-        'Error', 
-        `Failed to fetch transactions: ${error.message}\n\nCheck console for details.`
-      );
+      // console.error('Error fetching transactions:', error);
+      // console.error('Error details:', error.response?.data || error.message);
+      // Alert.alert(
+      //   'Error', 
+      //   `Failed to fetch transactions: ${error.message}\n\nCheck console for details.`
+      // );
+      if (error.response.status === 401) {
+        router.push('/(auth)/login');
+      }
       // Set empty array on error
       setTransactions([]);
       setFilteredTransactions([]);
@@ -196,24 +215,20 @@ const MoneyManager = () => {
     try {
       const newTransaction = {
         amount: parseFloat(amount),
-        description,
+        notes: description,
         category,
         type: transactionType,
-        date: new Date().toISOString(),
+        datetime: date.toISOString(),
         currency: 'USD',
       };
 
       console.log('Adding transaction:', newTransaction);
-      
+
       // Post to API
       await axios.post(`${API_URL}/transactions`, newTransaction);
 
       // Clear form
-      setAmount('');
-      setDescription('');
-      setCategory('Food');
-      setTransactionType('expense');
-      setDate(new Date());
+      resetForm();
       setModalVisible(false);
 
       // Refresh transactions from server
@@ -224,6 +239,66 @@ const MoneyManager = () => {
       console.error('Error adding transaction:', error);
       Alert.alert('Error', `Failed to add transaction: ${error.message}`);
     }
+  };
+
+  // Update Transaction
+  const updateTransaction = async () => {
+    if (!amount || !description || !editingId) {
+      Alert.alert('Error', 'Please fill all fields');
+      return;
+    }
+
+    try {
+      const updatedTransaction = {
+        amount: parseFloat(amount),
+        notes: description,
+        category,
+        type: transactionType,
+        datetime: date.toISOString(),
+        currency: 'USD',
+      };
+
+      console.log('Updating transaction:', updatedTransaction);
+
+      // Update via API
+      await axios.put(`${API_URL}/transactions/${editingId}`, updatedTransaction);
+
+      // Clear form
+      resetForm();
+      setModalVisible(false);
+
+      // Refresh transactions from server
+      fetchTransactions(1, true);
+
+      Alert.alert('Success', 'Transaction updated successfully');
+    } catch (error: any) {
+      console.error('Error updating transaction:', error);
+      Alert.alert('Error', `Failed to update transaction: ${error.message}`);
+    }
+  };
+
+  // Reset Form
+  const resetForm = () => {
+    setAmount('');
+    setDescription('');
+    setCategory('Food');
+    setTransactionType('expense');
+    setDate(new Date());
+    setIsEditing(false);
+    setEditingId(null);
+  };
+
+  // Open Edit Modal
+  const openEditModal = (item: Transaction) => {
+    setIsEditing(true);
+    setEditingId(item.id);
+    setAmount(item.amount.toString());
+    setDescription(item.notes || '');
+    setCategory(item.category || 'Food');
+    // Normalize the type to income/expense for the UI
+    setTransactionType(normalizeType(item.type));
+    setDate(new Date(item.datetime));
+    setModalVisible(true);
   };
 
   // Delete Transaction
@@ -263,11 +338,11 @@ const MoneyManager = () => {
     }
 
     const income = filteredTransactions
-      .filter(t => t.type === 'income')
+      .filter(t => isIncomeType(t.type))
       .reduce((sum, t) => sum + (t.amount || 0), 0);
 
     const expense = filteredTransactions
-      .filter(t => t.type === 'expense')
+      .filter(t => !isIncomeType(t.type))
       .reduce((sum, t) => sum + (t.amount || 0), 0);
 
     return { income, expense, balance: income - expense };
@@ -279,17 +354,18 @@ const MoneyManager = () => {
   const TransactionItem = ({ item }: { item: Transaction }) => (
     <TouchableOpacity
       style={styles.transactionItem}
+      onPress={() => openEditModal(item)}
       onLongPress={() => deleteTransaction(item.id)}
     >
       <View style={styles.transactionLeft}>
         <View
           style={[
             styles.categoryIcon,
-            { backgroundColor: item.type === 'credit' ? '#10B981' : '#EF4444' },
+            { backgroundColor: isIncomeType(item.type) ? '#10B981' : '#EF4444' },
           ]}
         >
           <Ionicons
-            name={item.type === 'credit' ? 'arrow-down' : 'arrow-up'}
+            name={isIncomeType(item.type) ? 'arrow-down' : 'arrow-up'}
             size={20}
             color="#FFF"
           />
@@ -298,10 +374,12 @@ const MoneyManager = () => {
           <Text style={styles.transactionDescription}>{item.notes || 'No notes'}</Text>
           <Text style={styles.transactionCategory}>{item.category || 'Uncategorized'}</Text>
           <Text style={styles.transactionDate}>
-            {item.datetime ? new Date(item.datetime).toLocaleDateString('en-US', {
+            {item.datetime ? new Date(item.datetime).toLocaleString('en-US', {
               month: 'short',
               day: 'numeric',
               year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
             }) : 'No date'}
           </Text>
         </View>
@@ -309,10 +387,10 @@ const MoneyManager = () => {
       <Text
         style={[
           styles.transactionAmount,
-          { color: item.type === 'income' ? '#10B981' : '#EF4444' },
+          { color: isIncomeType(item.type) ? '#10B981' : '#EF4444' },
         ]}
       >
-        {item.type === 'income' ? '+' : '-'}${(item.amount || 0).toFixed(2)}
+        {isIncomeType(item.type) ? '+' : '-'}${(item.amount || 0).toFixed(2)}
       </Text>
     </TouchableOpacity>
   );
@@ -470,8 +548,8 @@ const MoneyManager = () => {
               <Ionicons name="wallet-outline" size={50} color="#CCC" />
               <Text style={styles.emptyText}>No transactions found</Text>
               <Text style={styles.emptySubtext}>
-                {transactions.length > 0 
-                  ? 'Try adjusting your filters' 
+                {transactions.length > 0
+                  ? 'Try adjusting your filters'
                   : 'Add your first transaction to get started'}
               </Text>
             </View>
@@ -484,7 +562,10 @@ const MoneyManager = () => {
       {/* Add Transaction Button */}
       <TouchableOpacity
         style={styles.addButton}
-        onPress={() => setModalVisible(true)}
+        onPress={() => {
+          resetForm();
+          setModalVisible(true);
+        }}
       >
         <Ionicons name="add" size={28} color="#FFF" />
       </TouchableOpacity>
@@ -494,10 +575,13 @@ const MoneyManager = () => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
+              <TouchableOpacity onPress={() => {
+                resetForm();
+                setModalVisible(false);
+              }}>
                 <Ionicons name="close" size={24} color="#333" />
               </TouchableOpacity>
-              <Text style={styles.modalTitle}>Add Transaction</Text>
+              <Text style={styles.modalTitle}>{isEditing ? 'Edit Transaction' : 'Add Transaction'}</Text>
               <View style={{ width: 24 }} />
             </View>
 
@@ -574,21 +658,37 @@ const MoneyManager = () => {
                 ))}
               </View>
 
-              {/* Date Picker */}
-              <Text style={styles.inputLabel}>Date</Text>
-              <TouchableOpacity
-                style={styles.datePickerButton}
-                onPress={() => setShowDatePicker(true)}
-              >
-                <Text style={styles.datePickerText}>
-                  {date.toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric',
-                  })}
-                </Text>
-                <Ionicons name="calendar" size={20} color="#007AFF" style={styles.datePickerIcon} />
-              </TouchableOpacity>
+              {/* Date & Time Picker */}
+              <Text style={styles.inputLabel}>Date & Time</Text>
+              <View style={styles.dateTimeContainer}>
+                <TouchableOpacity
+                  style={[styles.datePickerButton, { flex: 1, marginRight: 8 }]}
+                  onPress={() => setShowDatePicker(true)}
+                >
+                  <Text style={styles.datePickerText}>
+                    {date.toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
+                  </Text>
+                  <Ionicons name="calendar" size={20} color="#007AFF" style={styles.datePickerIcon} />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.datePickerButton, { flex: 1 }]}
+                  onPress={() => setShowTimePicker(true)}
+                >
+                  <Text style={styles.datePickerText}>
+                    {date.toLocaleTimeString('en-US', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </Text>
+                  <Ionicons name="time" size={20} color="#007AFF" style={styles.datePickerIcon} />
+                </TouchableOpacity>
+              </View>
+
               {showDatePicker && (
                 <DateTimePicker
                   value={date}
@@ -603,14 +703,31 @@ const MoneyManager = () => {
                   style={styles.dateTimePicker}
                 />
               )}
+
+              {showTimePicker && (
+                <DateTimePicker
+                  value={date}
+                  mode="time"
+                  display="default"
+                  onChange={(event, selectedTime) => {
+                    setShowTimePicker(false);
+                    if (selectedTime) {
+                      setDate(selectedTime);
+                    }
+                  }}
+                  style={styles.dateTimePicker}
+                />
+              )}
             </ScrollView>
 
             {/* Submit Button */}
             <TouchableOpacity
               style={styles.submitButton}
-              onPress={addTransaction}
+              onPress={isEditing ? updateTransaction : addTransaction}
             >
-              <Text style={styles.submitButtonText}>Add Transaction</Text>
+              <Text style={styles.submitButtonText}>
+                {isEditing ? 'Update Transaction' : 'Add Transaction'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -988,6 +1105,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFF',
     letterSpacing: -0.3,
+  },
+  dateTimeContainer: {
+    flexDirection: 'row',
+    marginBottom: 20,
   },
   datePickerButton: {
     flexDirection: 'row',
