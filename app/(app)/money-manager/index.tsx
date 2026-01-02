@@ -57,7 +57,7 @@ const MoneyManager = () => {
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('Food');
-  const [transactionType, setTransactionType] = useState<'income' | 'expense'>('expense');
+  const [transactionType, setTransactionType] = useState<'credit' | 'debit'>('debit');
   const [date, setDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -70,8 +70,19 @@ const MoneyManager = () => {
   const [selectedType, setSelectedType] = useState('All');
   const [sortBy, setSortBy] = useState('date');
 
+  // Currency States
+  const [currency, setCurrency] = useState('BDT');
+
   const categories = ['All', 'Food', 'Transport', 'Entertainment', 'Shopping', 'Bills', 'Other'];
-  const types = ['All', 'income', 'expense'];
+  const types = ['All', 'credit', 'debit'];
+
+  const currencySymbols: { [key: string]: string } = {
+    'USD': '$',
+    'EUR': '€',
+    'BDT': '৳',
+  };
+
+  const currencies = ['USD', 'EUR', 'BDT'];
 
   // Apply Filters and Search
   const applyFilters = useCallback((data: Transaction[]) => {
@@ -134,9 +145,9 @@ const MoneyManager = () => {
       console.log('Fetching from:', url);
 
       const response = await axios.get(url);
-      console.log('API Response:', response.data);
-      console.log('Response type:', typeof response.data);
-      console.log('Is Array?', Array.isArray(response.data));
+      // console.log('API Response:', response.data);
+      // console.log('Response type:', typeof response.data);
+      // console.log('Is Array?', Array.isArray(response.data));
 
       // Handle different response formats
       let paginatedTransactions: Transaction[] = [];
@@ -158,8 +169,8 @@ const MoneyManager = () => {
         paginatedTransactions = [];
       }
 
-      console.log('Processed transactions:', paginatedTransactions);
-      console.log('Transaction count:', paginatedTransactions.length);
+      // console.log('Processed transactions:', paginatedTransactions);
+      // console.log('Transaction count:', paginatedTransactions.length);
 
       let updatedTransactions: Transaction[];
       if (pageNum === 1 || isRefresh) {
@@ -200,10 +211,8 @@ const MoneyManager = () => {
 
   // Re-apply filters when filter criteria change
   useEffect(() => {
-    if (Array.isArray(transactions)) {
-      applyFilters(transactions);
-    }
-  }, [searchQuery, selectedCategory, selectedType, sortBy, applyFilters]);
+    applyFilters(transactions);
+  }, [searchQuery, selectedCategory, selectedType, sortBy]);
 
   // Add Transaction
   const addTransaction = async () => {
@@ -219,7 +228,7 @@ const MoneyManager = () => {
         category,
         type: transactionType,
         datetime: date.toISOString(),
-        currency: 'USD',
+        currency,
       };
 
       console.log('Adding transaction:', newTransaction);
@@ -255,7 +264,7 @@ const MoneyManager = () => {
         category,
         type: transactionType,
         datetime: date.toISOString(),
-        currency: 'USD',
+        currency,
       };
 
       console.log('Updating transaction:', updatedTransaction);
@@ -282,7 +291,7 @@ const MoneyManager = () => {
     setAmount('');
     setDescription('');
     setCategory('Food');
-    setTransactionType('expense');
+    setTransactionType('debit');
     setDate(new Date());
     setIsEditing(false);
     setEditingId(null);
@@ -610,10 +619,35 @@ const MoneyManager = () => {
                 ))}
               </View>
 
+              {/* Currency Selection */}
+              <Text style={styles.inputLabel}>Currency</Text>
+              <View style={styles.currencySelector}>
+                {currencies.map(curr => (
+                  <TouchableOpacity
+                    key={curr}
+                    style={[
+                      styles.currencyButton,
+                      currency === curr && styles.currencyButtonActive,
+                    ]}
+                    onPress={() => setCurrency(curr)}
+                  >
+                    <Text
+                      style={[
+                        styles.currencyButtonText,
+                        currency === curr && styles.currencyButtonTextActive,
+                      ]}
+                    >
+                      {currencySymbols[curr]} {curr}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
               {/* Amount Input */}
               <Text style={styles.inputLabel}>Amount</Text>
               <View style={styles.amountInputContainer}>
-                <Text style={styles.currencySymbol}>$</Text>
+                <Text style={styles.currencySymbol}>{currencySymbols[currency]}</Text>
+                
                 <TextInput
                   style={styles.amountInput}
                   placeholder="0.00"
@@ -1015,6 +1049,34 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
   typeButtonTextActive: {
+    color: '#007AFF',
+  },
+  currencySelector: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 20,
+  },
+  currencyButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E8ECF4',
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+  },
+  currencyButtonActive: {
+    borderColor: '#007AFF',
+    backgroundColor: '#F0F8FF',
+  },
+  currencyButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#666',
+    letterSpacing: -0.2,
+  },
+  currencyButtonTextActive: {
     color: '#007AFF',
   },
   amountInputContainer: {
