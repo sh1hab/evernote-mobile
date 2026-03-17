@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,11 +13,9 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
+import api from '../../services/api';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { router } from 'expo-router';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL;
 const ITEMS_PER_PAGE = 10;
 
 interface Transaction {
@@ -49,8 +47,12 @@ const MoneyManager = () => {
   const [filteredTransactions, setFilteredTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
+
+  // Ref to always hold the latest transactions (avoids stale closure in async functions)
+  const transactionsRef = useRef<Transaction[]>([]);
 
   // Modal States
   const [modalVisible, setModalVisible] = useState(false);
@@ -131,76 +133,58 @@ const MoneyManager = () => {
     setFilteredTransactions(filtered);
   }, [searchQuery, selectedCategory, selectedType, sortBy]);
 
-  // Fetch Transactions with improved error handling
   const fetchTransactions = async (pageNum: number = 1, isRefresh: boolean = false) => {
     try {
       if (isRefresh) {
         setRefreshing(true);
-        setPage(1);
       } else if (pageNum === 1) {
         setLoading(true);
+      } else {
+        setIsLoadingMore(true);
       }
 
-      const url = `${API_URL}/transactions?page=${pageNum}&limit=${ITEMS_PER_PAGE}`;
-      console.log('Fetching from:', url);
+      // NOTE: backend uses `per_page` not `limit` (same as notes API)
+      const url = `/transactions?page=${pageNum}&per_page=${ITEMS_PER_PAGE}`;
+      console.log('Fetching page:', pageNum, 'url:', url);
 
-      const response = await axios.get(url);
-      // console.log('API Response:', response.data);
-      // console.log('Response type:', typeof response.data);
-      // console.log('Is Array?', Array.isArray(response.data));
+      const response = await api.get(url);
 
       // Handle different response formats
-      let paginatedTransactions: Transaction[] = [];
-
+      let incoming: Transaction[] = [];
       if (Array.isArray(response.data)) {
-        // Direct array response
-        paginatedTransactions = response.data;
-      } else if (response.data && Array.isArray(response.data.transactions)) {
-        // Nested in transactions property
-        paginatedTransactions = response.data.transactions;
-      } else if (response.data && Array.isArray(response.data.data)) {
-        // Nested in data property
-        paginatedTransactions = response.data.data;
-      } else if (response.data && typeof response.data === 'object') {
-        // Single object - wrap in array
-        paginatedTransactions = [response.data];
+        incoming = response.data;
+      } else if (response.data?.transactions && Array.isArray(response.data.transactions)) {
+        incoming = response.data.transactions;
+      } else if (response.data?.data && Array.isArray(response.data.data)) {
+        incoming = response.data.data;
       } else {
         console.error('Unexpected response format:', response.data);
-        paginatedTransactions = [];
       }
 
-      // console.log('Processed transactions:', paginatedTransactions);
-      // console.log('Transaction count:', paginatedTransactions.length);
+      console.log(`Page ${pageNum} returned ${incoming.length} items`);
 
-      let updatedTransactions: Transaction[];
-      if (pageNum === 1 || isRefresh) {
-        updatedTransactions = paginatedTransactions;
-      } else {
-        updatedTransactions = [...transactions, ...paginatedTransactions];
-      }
+      setHasMore(incoming.length === ITEMS_PER_PAGE);
+      setPage(pageNum);
 
-      setTransactions(updatedTransactions);
-      setHasMore(paginatedTransactions.length === ITEMS_PER_PAGE);
+      // Build the full list using the ref (always up-to-date, no stale closure)
+      const updated = (pageNum === 1 || isRefresh)
+        ? incoming
+        : [...transactionsRef.current, ...incoming];
 
-      // Apply filters to the updated transactions
-      applyFilters(updatedTransactions);
+      transactionsRef.current = updated;  // keep ref in sync
+      setTransactions(updated);
 
     } catch (error: any) {
-      // console.error('Error fetching transactions:', error);
-      // console.error('Error details:', error.response?.data || error.message);
-      // Alert.alert(
-      //   'Error', 
-      //   `Failed to fetch transactions: ${error.message}\n\nCheck console for details.`
-      // );
-      if (error.response.status === 401) {
-        router.push('/(auth)/login');
+      console.error('Fetch error:', error.response?.status, error.message);
+      if (pageNum === 1) {
+        transactionsRef.current = [];
+        setTransactions([]);
+        setFilteredTransactions([]);
       }
-      // Set empty array on error
-      setTransactions([]);
-      setFilteredTransactions([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setIsLoadingMore(false);
     }
   };
 
@@ -209,10 +193,10 @@ const MoneyManager = () => {
     fetchTransactions(1, false);
   }, []);
 
-  // Re-apply filters when filter criteria change
+  // Re-apply filters whenever transactions OR filter settings change
   useEffect(() => {
     applyFilters(transactions);
-  }, [searchQuery, selectedCategory, selectedType, sortBy]);
+  }, [transactions, searchQuery, selectedCategory, selectedType, sortBy]);
 
   // Add Transaction
   const addTransaction = async () => {
@@ -234,7 +218,7 @@ const MoneyManager = () => {
       console.log('Adding transaction:', newTransaction);
 
       // Post to API
-      await axios.post(`${API_URL}/transactions`, newTransaction);
+      await api.post('/transactions', newTransaction);
 
       // Clear form
       resetForm();
@@ -270,7 +254,7 @@ const MoneyManager = () => {
       console.log('Updating transaction:', updatedTransaction);
 
       // Update via API
-      await axios.put(`${API_URL}/transactions/${editingId}`, updatedTransaction);
+      await api.put(`/transactions/${editingId}`, updatedTransaction);
 
       // Clear form
       resetForm();
@@ -319,7 +303,7 @@ const MoneyManager = () => {
         style: 'destructive',
         onPress: async () => {
           try {
-            await axios.delete(`${API_URL}/transactions/${id}`);
+            await api.delete(`/transactions/${id}`);
             fetchTransactions(1, true);
             Alert.alert('Success', 'Transaction deleted');
           } catch (error: any) {
@@ -331,12 +315,10 @@ const MoneyManager = () => {
     ]);
   };
 
-  // Load More
+  // Load More — guarded by isLoadingMore to prevent duplicate requests
   const loadMore = () => {
-    if (hasMore && !loading && !refreshing) {
-      const nextPage = page + 1;
-      setPage(nextPage);
-      fetchTransactions(nextPage, false);
+    if (hasMore && !isLoadingMore && !loading && !refreshing) {
+      fetchTransactions(page + 1, false);
     }
   };
 
@@ -404,12 +386,12 @@ const MoneyManager = () => {
     </TouchableOpacity>
   );
 
-  // Footer Component for Loading
+  // Footer: only shows during pagination, not initial load
   const Footer = () => {
-    if (!loading) return null;
+    if (!isLoadingMore) return null;
     return (
       <View style={styles.footer}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="small" color="#007AFF" />
       </View>
     );
   };
@@ -647,7 +629,7 @@ const MoneyManager = () => {
               <Text style={styles.inputLabel}>Amount</Text>
               <View style={styles.amountInputContainer}>
                 <Text style={styles.currencySymbol}>{currencySymbols[currency]}</Text>
-                
+
                 <TextInput
                   style={styles.amountInput}
                   placeholder="0.00"
